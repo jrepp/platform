@@ -17,7 +17,13 @@ jobs:
       # the result for the others.
       fail-fast: false
       matrix:
-        go: ["1.25.x", "1.26.x"]
+        go: ["1.25.x", "1.26.x", "1.27.x"]
+    env:
+      # Build each module exactly as a consumer receives it. go/go.work sits one
+      # directory above, and Go finds it by walking up, so without this the
+      # module would be built in workspace mode and a missing dependency could
+      # be masked by a sibling module.
+      GOWORK: "off"
     defaults:
       run:
         working-directory: go/store

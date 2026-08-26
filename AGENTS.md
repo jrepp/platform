@@ -51,7 +51,14 @@ either. Before adding one, name both consumers in the pull request.
 
 - Every package is released on its own version line, tagged
   `<package-path>/vX.Y.Z`. A Go module in a subdirectory resolves only by a tag
-  of that exact shape.
+  of that exact shape; a bare `vX.Y.Z` is refused with
+  `unknown revision <package-path>/vX.Y.Z`.
+- At major version 2 and above a Go module path carries the suffix
+  (`module github.com/jrepp/platform/go/<name>/v2`) while the tag prefix stays
+  the subdirectory path (`go/<name>/v2.0.0`). The directory does not move.
+- Build each Go module with `GOWORK=off`, the way CI does. `go/go.work` is found
+  by walking up from a module directory, so without it a build runs in workspace
+  mode and can mask a dependency a consumer would be missing.
 - Releases come from conventional commits through release-please. Scope the
   commit to the package: `feat(store):`, `fix(store):`.
 - Each package declares its supported toolchain versions in its own manifest,

@@ -174,7 +174,7 @@ repository until the gate its path relies on has passed.**
 | C1 | Workflow consumption | A workflow in another `jrepp` repository calls a reusable workflow here and runs. No access setting is involved now that this repository is public. |
 | C2 | Module fetch without credentials | Superseded by the decision to publish. Retained so the reasoning is not lost if the repository is ever made private again. |
 | C3 | Module fetch by the chosen path | A consumer's CI runs `go get github.com/jrepp/platform/go/<name>@<tag>` with no credential configured and no `GOPRIVATE`, resolving through the public proxy. |
-| C4 | Release produces a resolvable version | release-please cuts `go/<name>/vX.Y.Z`, and `go list -m -versions` reports it from a machine that has never seen this working tree. |
+| C4 | Release produces a resolvable version | release-please cuts `go/<name>/vX.Y.Z`, and `go list -m -versions` reports it from a machine that has never seen this working tree. **Tag format half verified 2026-08-26** (below); the release-please half is open until the first release. |
 | C5 | Verification posture recorded | Whether the module is covered by the checksum database under the chosen path, stated plainly. If it is not, that is an accepted cost with a named reason, not an omission. |
 
 Current state, observed 2026-08-26:
@@ -187,8 +187,21 @@ Current state, observed 2026-08-26:
   decision to publish came before the experiment. That is worth stating plainly
   rather than marking the gate passed: the credential requirement for a private
   module is documented from the module system's behaviour, not from a run here.
-- The repository has no tags yet, so no version resolves. C4 is open until
-  release-please cuts the first one.
+- **The tag format is verified.** A disposable `go/store/v0.0.1-rc.1` tag
+  resolved to `github.com/jrepp/platform/go/store v0.0.1-rc.1`, and a
+  deliberately bare `v0.0.2-wrongformat` tag on the same commit was refused:
+
+  ```text
+  go: github.com/jrepp/platform/go/store@v0.0.2-wrongformat:
+      invalid version: unknown revision go/store/v0.0.2-wrongformat
+  ```
+
+  The toolchain looks for the subdirectory prefix and nothing else, so the
+  release-please configuration produces the only shape that resolves. Both tags
+  were fetched with `GOPROXY=direct` so nothing reached the public proxy's
+  immutable cache, and both were then deleted. C4's remaining half is whether
+  release-please actually emits that shape, which the first release will show.
+- No package has a real release yet, so nothing resolves by a stable version.
 - The store package is proposed but unconsumed, which is the right order: the
   extraction can be reviewed on its merits before anything depends on it.
 

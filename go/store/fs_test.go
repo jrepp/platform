@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jrepp/platform/store"
+	"github.com/jrepp/platform/go/store"
 )
 
 func newStore(t *testing.T, cfg store.FSConfig) (*store.FS, string) {

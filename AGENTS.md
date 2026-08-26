@@ -83,10 +83,33 @@ fresh.
 - Leave the original in place until a consumer has actually run against the
   extracted package. Delete it in a separate change.
 
+## Go discipline
+
+The linter configuration in `.golangci.yml` is the contract, not a suggestion.
+Two rules about changing it:
+
+- **Never raise a complexity threshold to make code pass.** `gocognit` and
+  `gocyclo` sit near the tool's defaults on purpose. A threshold set to whatever
+  the current worst function scores measures nothing and can only ever be
+  raised. Split the function instead.
+- **Suppress with a reason or not at all.** A `//nolint` directive states which
+  linter and why on the same line. A bare `//nolint` is a silent exception and
+  will be asked about in review.
+
+Race detection is not optional. Every package's tests run under `-race` in CI,
+because a data race is exactly the failure that survives review, `go vet`, and a
+green test run.
+
+`govulncheck` runs on every change, matching the rest of the fleet.
+
 ## Validation
 
-Each package validates the way CI does, from its own directory. For Go:
+Each package validates the way CI does, from its own directory, with the
+workspace off so the module builds as a consumer receives it:
 
 ```sh
-go build ./... && go vet ./... && go test -race ./...
+GOWORK=off go build ./... && \
+GOWORK=off go vet ./... && \
+GOWORK=off go test -race ./... && \
+GOWORK=off golangci-lint run --config ../../.golangci.yml ./...
 ```

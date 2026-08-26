@@ -184,6 +184,8 @@ func (s *FS) Open(ctx context.Context, name string) (io.ReadCloser, Object, erro
 	if err != nil {
 		return nil, Object{}, err
 	}
+	// #nosec G304 -- full comes from LocalPath, which resolves the name through
+	// the containment check and returns only paths proven to be under the root.
 	file, err := os.Open(full)
 	if err != nil {
 		return nil, Object{}, err
@@ -248,7 +250,7 @@ func (s *FS) List(ctx context.Context) ([]Object, error) {
 		if walkErr != nil {
 			// An unreadable subtree is skipped rather than failing the listing:
 			// one bad directory should not hide every other object.
-			return nil
+			return nil //nolint:nilerr // skipping is the intended handling
 		}
 		if entry.IsDir() {
 			return nil
@@ -258,7 +260,10 @@ func (s *FS) List(ctx context.Context) ([]Object, error) {
 		}
 		rel, err := filepath.Rel(s.cfg.Root, full)
 		if err != nil {
-			return nil
+			// The path came from walking this root, so it is relative to it by
+			// construction. If that ever fails, skip the entry rather than
+			// abandoning the listing.
+			return nil //nolint:nilerr // skipping is the intended handling
 		}
 		name := filepath.ToSlash(rel)
 		if strings.HasPrefix(name, ".") {
@@ -266,7 +271,9 @@ func (s *FS) List(ctx context.Context) ([]Object, error) {
 		}
 		stat, err := entry.Info()
 		if err != nil {
-			return nil
+			// The entry disappeared between the walk and the stat. It is not
+			// part of the listing, which is the honest answer.
+			return nil //nolint:nilerr // skipping is the intended handling
 		}
 		objects = append(objects, Object{
 			Name:    name,

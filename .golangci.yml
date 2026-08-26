@@ -1,0 +1,85 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: none
+  enable:
+    # Correctness
+    - errcheck
+    - errorlint
+    - govet
+    - ineffassign
+    - nilerr
+    - staticcheck
+    - unused
+    - bodyclose
+    - durationcheck
+    - noctx
+    # Clarity
+    - gocritic
+    - revive
+    - unconvert
+    - unparam
+    - usestdlibvars
+    - predeclared
+    - misspell
+    # Bounded complexity
+    - gocognit
+    - gocyclo
+    # Security
+    - gosec
+
+  settings:
+    errcheck:
+      # An unchecked type assertion panics on the wrong type, which is never
+      # what a library should do to its caller.
+      check-type-assertions: true
+      # `_ = f()` is left alone. Writing the blank is already the explicit
+      # decision this linter exists to force; requiring a nolint directive on
+      # top of it would only add noise to the places that already said so.
+      check-blank: false
+    govet:
+      enable-all: true
+      disable:
+        # Field alignment optimises memory layout at the cost of grouping
+        # related fields together. Readability wins in a library this small.
+        - fieldalignment
+        # `if err := f(); err != nil` inside a function that already has an err
+        # is the idiom, not a bug. The check cannot tell the two apart and
+        # reports the idiom far more often than a real shadowing mistake.
+        - shadow
+    gocognit:
+      # Deliberately near the tool's own default rather than above the code
+      # that exists. A threshold set to whatever the current worst function
+      # scores measures nothing and can only be raised.
+      min-complexity: 20
+    gocyclo:
+      min-complexity: 15
+    revive:
+      rules:
+        - name: exported
+        - name: error-strings
+        - name: error-return
+        - name: context-as-argument
+        - name: indent-error-flow
+        - name: var-naming
+
+  exclusions:
+    rules:
+      # Tests deliberately do things production code must not: ignore errors
+      # from setup helpers, write fixtures with loose permissions, and run long
+      # table-driven functions.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gocognit
+          - gocyclo
+          - gosec
+          - unparam
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

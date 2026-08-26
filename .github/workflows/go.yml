@@ -8,6 +8,11 @@ on:
 permissions:
   contents: read
 
+# A pull request pushed twice does not need the first run finished.
+concurrency:
+  group: go-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   store:
     name: go/store (${{ matrix.go }})
@@ -82,3 +87,86 @@ jobs:
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
           "$(go env GOPATH)/bin/govulncheck" ./...
+
+  # Checks a reviewer would otherwise have to make by reading.
+  #
+  # This repository stays on GitHub-hosted runners deliberately. It is public,
+  # and routing a public repository's pull request jobs to the fleet's own
+  # machines would run code from any fork on hardware that hosts other
+  # services. Hosted minutes are free for public repositories; the fleet's
+  # runners are for repositories whose contributors are already trusted.
+  hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: "1.27.x"
+          cache: false
+
+      - name: Workflows are valid
+        run: |
+          set -euo pipefail
+          version=v1.7.7
+          curl -sSfL "https://github.com/rhysd/actionlint/releases/download/${version}/actionlint_${version#v}_linux_amd64.tar.gz" \
+            | tar -xz -C /tmp actionlint
+          /tmp/actionlint -color
+
+      - name: Actions are pinned by digest
+        run: |
+          set -euo pipefail
+          # A tag can move; a digest cannot. Pinning is only a supply-chain
+          # control if every reference is pinned.
+          if grep -rnE 'uses:\s+[a-z0-9_.-]+/[^@]+@(v[0-9]|main|master)' .github/workflows/; then
+            echo "the references above use a tag; pin them to a commit digest" >&2
+            exit 1
+          fi
+          echo "every action is pinned by digest"
+
+      - name: Every module is tidy and released on its own terms
+        run: |
+          set -euo pipefail
+          # GOWORK=off so each module is built as a consumer receives it. The
+          # workspace is a development convenience and must never be what makes
+          # a module compile.
+          export GOWORK=off
+          status=0
+          while IFS= read -r mod; do
+            dir="$(dirname "$mod")"
+            echo "::group::$dir"
+            ( cd "$dir"
+              cp go.mod /tmp/go.mod.before
+              cp go.sum /tmp/go.sum.before 2>/dev/null || : > /tmp/go.sum.before
+              go mod tidy
+              if ! diff -q /tmp/go.mod.before go.mod >/dev/null; then
+                echo "go.mod is not tidy in $dir" >&2; exit 1
+              fi
+              go build ./...
+            ) || status=1
+            echo "::endgroup::"
+          done < <(find . -name go.mod -not -path './.git/*')
+          exit $status
+
+      - name: Release configuration matches the modules on disk
+        run: |
+          set -euo pipefail
+          # A module with no release-please entry is a module nobody can depend
+          # on by version, which is the whole point of this repository.
+          python3 - <<'PY'
+          import json, pathlib, sys
+
+          config = json.load(open("release-please-config.json"))
+          configured = set(config["packages"])
+          on_disk = {
+              str(p.parent).replace("\\", "/")
+              for p in pathlib.Path(".").rglob("go.mod")
+              if ".git" not in p.parts
+          }
+          missing = on_disk - configured
+          extra = configured - on_disk
+          if missing:
+              print(f"modules with no release-please entry: {sorted(missing)}", file=sys.stderr)
+          if extra:
+              print(f"release-please entries with no module: {sorted(extra)}", file=sys.stderr)
+          sys.exit(1 if (missing or extra) else 0)
+          PY

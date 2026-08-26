@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+# Run what CI runs, before CI runs it.
+#
+# Every package here is released independently, so each is built and tested on
+# its own -- the way a consumer receives it -- rather than through a workspace
+# that could hide a dependency the consumer would be missing.
+#
+#   scripts/check          everything
+#   scripts/check fast     everything except the race detector
+set -euo pipefail
+
+root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${root_dir}"
+
+mode="${1:-full}"
+failed=()
+
+step() {
+  local name="$1"; shift
+  printf '%-38s' "${name}"
+  if output="$("$@" 2>&1)"; then
+    echo "ok"
+  else
+    echo "FAILED"
+    printf '%s\n' "${output}" | sed 's/^/    /'
+    failed+=("${name}")
+  fi
+}
+
+# A shim left by a version manager satisfies `command -v` and then fails when
+# invoked, which reads as the tool failing rather than as the tool being absent.
+available() {
+  command -v "$1" >/dev/null 2>&1 && "$@" >/dev/null 2>&1
+}
+
+# Every action pinned by digest. A tag can move; a digest cannot, so pinning is
+# a supply-chain control only if the check is exhaustive rather than a habit.
+pins_check() {
+  if grep -rnE 'uses:[[:space:]]+[a-z0-9_.-]+/[^@]+@(v[0-9]|main|master)' .github/workflows/; then
+    echo "the references above use a tag; pin them to a commit digest"
+    return 1
+  fi
+}
+
+# Each Go module, on its own terms.
+go_modules() {
+  find . -name go.mod -not -path './.git/*' -print0 | while IFS= read -r -d '' mod; do
+    printf '%s\n' "$(dirname "${mod}")"
+  done | sort
+}
+
+for dir in $(go_modules); do
+  name="${dir#./}"
+  (
+    cd "${dir}"
+    # GOWORK=off so a module builds as a consumer receives it: go.work is found
+    # by walking up, and workspace mode can mask a missing dependency.
+    export GOWORK=off
+    unformatted="$(gofmt -l .)"
+    [[ -z "${unformatted}" ]] || { echo "gofmt needed for: ${unformatted}"; exit 1; }
+    go build ./... && go vet ./...
+    before_mod="$(cat go.mod)"
+    before_sum="$(cat go.sum 2>/dev/null || true)"
+    go mod tidy
+    if [[ "${before_mod}" != "$(cat go.mod)" || "${before_sum}" != "$(cat go.sum 2>/dev/null || true)" ]]; then
+      echo "go.mod or go.sum is not tidy"
+      exit 1
+    fi
+    if [[ "${mode}" == "fast" ]]; then go test ./...; else go test -race ./...; fi
+  ) >/tmp/module-check.log 2>&1 \
+    && printf '%-38s%s\n' "${name}" "ok" \
+    || { printf '%-38s%s\n' "${name}" "FAILED"; sed 's/^/    /' /tmp/module-check.log; failed+=("${name}"); }
+done
+
+step "actions pinned by digest" pins_check
+
+if available actionlint -version; then
+  step "actionlint" actionlint
+else
+  printf '%-38s%s\n' "actionlint" "skipped (not installed)"
+fi
+
+if available golangci-lint version; then
+  for dir in $(go_modules); do
+    ( cd "${dir}" && GOWORK=off golangci-lint run --config "${root_dir}/.golangci.yml" ./... ) >/tmp/lint.log 2>&1 \
+      && printf '%-38s%s\n' "golangci-lint ${dir#./}" "ok" \
+      || { printf '%-38s%s\n' "golangci-lint ${dir#./}" "FAILED"; sed 's/^/    /' /tmp/lint.log; failed+=("lint ${dir#./}"); }
+  done
+else
+  printf '%-38s%s\n' "golangci-lint" "skipped (not installed)"
+fi
+
+if (( ${#failed[@]} > 0 )); then
+  printf '\n%d check(s) failed: %s\n' "${#failed[@]}" "${failed[*]}" >&2
+  exit 1
+fi
+echo
+echo "all checks passed"

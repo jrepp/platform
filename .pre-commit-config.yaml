@@ -1,0 +1,13 @@
+# Local gates, run before a commit rather than discovered in CI.
+#
+# `fast` skips the race detector, which belongs in CI where a minute costs
+# nobody's attention.
+repos:
+  - repo: local
+    hooks:
+      - id: platform-check
+        name: build, vet, tidy, lint and test every module
+        entry: scripts/check fast
+        language: system
+        pass_filenames: false
+        always_run: true

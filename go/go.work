@@ -1,0 +1,9 @@
+// Workspace for developing this repository's Go modules together.
+//
+// Each module under go/ is released independently, so a consumer depends on
+// exactly one of them. This file exists only so that a change spanning two of
+// them can be built locally without publish-then-consume round trips; CI builds
+// each module on its own, where the workspace does not apply.
+go 1.25
+
+use ./store

@@ -107,6 +107,9 @@ Code failing any of these belongs in the service that needs it.
 
 ## Development
 
+Use a topic branch and PR; main accepts squash merges after required checks.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for auto-merge and release PRs.
+
 Each package builds on its own, the way CI builds it:
 
 ```sh

@@ -7,10 +7,13 @@ by this document. Coordination: [RFC-009][rfc] and [L0 domain model][domain].
 
 ## Package boundaries
 
-Use three independently versioned Go modules. Keep their types small and useful
+Consider three independently versioned Go modules. Keep their types small and useful
 to actual service adapters; a shared domain package is not a shared database.
-The named initial consumers are auth and hosting-api. Each implementation PR
-must include concrete use in both, or keep the abstraction local until it does.
+The candidate initial consumers are auth and hosting-api. Each module needs
+demonstrated use in both; being Go services does not establish shared semantics.
+Link concrete consumer adapter diffs before admitting a module, then publish it
+before merging version-pinned adoption. Keep the abstraction local if useful
+consumption cannot be demonstrated. Admit identity, scope and access separately.
 
 | Proposed module | Shared representation and behavior | Excluded responsibility |
 | --- | --- | --- |
@@ -87,9 +90,9 @@ from this table. A dedicated audit module needs independent evidence of reuse.
 
 | Work | Small reviewable output | Acceptance / release condition |
 | --- | --- | --- |
-| C3.7: map and characterize | Exact source/type inventory in auth and hosting; consumer fixtures for identity and scope | Name both adapter call sites and preserve existing identity/refusal behavior |
-| C3.8: identity and scope modules | Only value types/validation needed by those fixtures; separate modules and versions | Independent builds; rename/name-reuse, issuer/subject collision, empty/wrong scope and serialization cases |
-| C3.9: access contract and adapter parity | Explicit requests/decisions/action scope; keep current service evaluators behind adapters initially | Existing allowed/denied cases and refusal reasons unchanged; forged labels and unknown actions do not gain rights |
+| C3.7: map and characterize | Exact source/type inventory and existing behavior fixtures in auth and hosting | Characterization can ship alone; extraction additionally needs useful adapter call sites in both services |
+| C3.8: conditional identity and scope modules | Only values needed by demonstrated consumer adapters; admit each module independently | Identity key comparison does not establish scope semantics; scope requires authoritative mappings and its own two-consumer fixtures |
+| C3.9: conditional access contract and adapter parity | Characterize existing evaluators locally; extract only a demonstrated common request/decision seam | Existing allowed/denied cases and refusal reasons unchanged; defer extraction when group/channel semantics do not align |
 | C3.10: admission and consumer adoption | Package release configuration, CI coverage, versioned adapter PRs and consumption evidence | Both consumers run against released packages with workspace off; remove duplicate mechanics only afterward |
 
 An evaluator, full membership projection, delegated administration and new
@@ -99,6 +102,15 @@ Biohazard can start with configured scope and its current access mechanism;
 its browser/Node client uses a service contract, not Go internals. Add Node or
 other language packages only when a concrete consumer needs a published format.
 
+The immediate [consumer characterization trajectory][trajectory] starts with
+service-local tests. An external issuer/subject key is a candidate minimum;
+hosting must demonstrate a real use before extracting it. Do not add a wrapper
+that is immediately discarded or used only in tests to meet package admission.
+Existing provider normalization and account linking remain adapter behavior;
+exact-key comparison must not silently migrate identities or change linking.
+Principal, scope, role and delegation types remain proposals until their own
+contracts are needed. No new public wire format is required for these local tests.
+
 ## Packaging, quality and compatibility
 
 Create module directories only when implementing a selected slice. Add each to
@@ -107,6 +119,13 @@ CI caller job. The reusable Go checks live in this repository; each module runs
 with `GOWORK=off`, formatting, build, vet, race tests, lint, tidy and vulnerability
 checks. Current baseline is Go 1.27.1. No framework or provider dependency is
 needed for the initial modules.
+
+Release wiring accompanies each admitted module PR. Consumer adapter branches
+can demonstrate pre-release compatibility, but final adoption must use published
+module versions with workspace off and no local replacement. A producer release
+does not claim both consumers have adopted it; close that gate only after their
+version-pinned builds and behavior fixtures pass. Remove duplicate mechanics
+separately after consumer execution, as required by the extraction rules.
 
 Use real consumer characterization tests plus a small set of shared vectors
 once a wire format exists. Specify serialization/version and unknown-field rules
@@ -122,3 +141,4 @@ deployment pins or grant access automatically.
 
 [rfc]: https://github.com/jrepp/t1-hosting/blob/main/docs-cms/rfcs/rfc-009-shared-content-services-and-protocols.md
 [domain]: https://github.com/jrepp/t1-hosting/blob/main/docs/shared-content/domain-model.md
+[trajectory]: https://github.com/jrepp/t1-hosting/blob/main/docs/shared-content/planning/l0-contract-trajectory.md

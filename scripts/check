@@ -6,7 +6,7 @@
 # that could hide a dependency the consumer would be missing.
 #
 #   scripts/check          everything
-#   scripts/check fast     everything except the race detector
+#   scripts/check fast     everything except the race detector and vulncheck
 set -euo pipefail
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -88,6 +88,14 @@ if available golangci-lint version; then
   done
 else
   printf '%-38s%s\n' "golangci-lint" "skipped (not installed)"
+fi
+
+if [[ "${mode}" != "fast" ]] && available govulncheck -version; then
+  for dir in $(go_modules); do
+    step "govulncheck ${dir#./}" bash -c 'cd "$1" && GOWORK=off govulncheck ./...' _ "${dir}"
+  done
+elif [[ "${mode}" != "fast" ]]; then
+  printf '%-38s%s\n' "govulncheck" "skipped (not installed)"
 fi
 
 if (( ${#failed[@]} > 0 )); then

@@ -1,0 +1,69 @@
+name: reusable Go checks
+
+on:
+  workflow_call:
+    inputs:
+      module:
+        description: Module directory relative to the caller checkout
+        type: string
+        default: .
+      lint-config:
+        description: Linter configuration relative to the module
+        type: string
+        default: .golangci.yml
+      runs-on:
+        description: JSON runner label array chosen by the caller
+        type: string
+        default: '["ubuntu-latest"]'
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    env:
+      GOWORK: "off"
+      CGO_ENABLED: "1"
+      CC: clang
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ inputs.module }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: "1.27.1"
+          cache: false
+      - name: Format and tidy
+        run: |
+          set -euo pipefail
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "gofmt needed for:"
+            echo "$unformatted"
+            exit 1
+          fi
+          before_mod="$(cat go.mod)"
+          before_sum="$(cat go.sum 2>/dev/null || true)"
+          go mod tidy
+          if [ "$before_mod" != "$(cat go.mod)" ] || [ "$before_sum" != "$(cat go.sum 2>/dev/null || true)" ]; then
+            echo "module files are not tidy" >&2
+            exit 1
+          fi
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test -race ./...
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.13.2
+          working-directory: ${{ inputs.module }}
+          args: --config ${{ inputs.lint-config }}
+      - name: Vulnerability check
+        run: |
+          set -euo pipefail
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          "$(go env GOPATH)/bin/govulncheck" ./...

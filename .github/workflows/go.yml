@@ -8,145 +8,24 @@ on:
 permissions:
   contents: read
 
-# A pull request pushed twice does not need the first run finished.
 concurrency:
   group: go-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   store:
-    name: go/store (${{ matrix.go }})
-    runs-on: ubuntu-latest
-    strategy:
-      # Every supported version is proven, so one failing version does not hide
-      # the result for the others.
-      fail-fast: false
-      matrix:
-        go: ["1.25.x", "1.26.x", "1.27.x"]
-    env:
-      # Build each module exactly as a consumer receives it. go/go.work sits one
-      # directory above, and Go finds it by walking up, so without this the
-      # module would be built in workspace mode and a missing dependency could
-      # be masked by a sibling module.
-      GOWORK: "off"
-    defaults:
-      run:
-        working-directory: go/store
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        with:
-          go-version: ${{ matrix.go }}
-          # This module has no dependencies, so there is no go.sum to key a
-          # cache on and nothing worth caching.
-          cache: false
-      - name: Check formatting
-        run: |
-          unformatted="$(gofmt -l .)"
-          if [ -n "$unformatted" ]; then
-            echo "gofmt needed for:"
-            echo "$unformatted"
-            exit 1
-          fi
-      - run: go build ./...
-      - run: go vet ./...
-      - run: go test -race ./...
+    uses: ./.github/workflows/go-check.yml
+    with:
+      module: go/store
+      lint-config: ../../.golangci.yml
 
-  lint:
-    name: go/store lint
-    runs-on: ubuntu-latest
-    env:
-      GOWORK: "off"
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        with:
-          go-version: "1.27.x"
-          cache: false
-      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
-        with:
-          version: v2.13.1
-          working-directory: go/store
-          args: --config ../../.golangci.yml
+  workflows:
+    uses: ./.github/workflows/workflow-check.yml
 
-  vulncheck:
-    name: go/store govulncheck
-    runs-on: ubuntu-latest
-    env:
-      GOWORK: "off"
-    defaults:
-      run:
-        working-directory: go/store
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        with:
-          go-version: "1.27.x"
-          cache: false
-      - name: govulncheck
-        run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
-          "$(go env GOPATH)/bin/govulncheck" ./...
-
-  # Checks a reviewer would otherwise have to make by reading.
-  #
-  # This repository stays on GitHub-hosted runners deliberately. It is public,
-  # and routing a public repository's pull request jobs to the fleet's own
-  # machines would run code from any fork on hardware that hosts other
-  # services. Hosted minutes are free for public repositories; the fleet's
-  # runners are for repositories whose contributors are already trusted.
   hygiene:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        with:
-          go-version: "1.27.x"
-          cache: false
-
-      - name: Workflows are valid
-        run: |
-          set -euo pipefail
-          version=v1.7.7
-          curl -sSfL "https://github.com/rhysd/actionlint/releases/download/${version}/actionlint_${version#v}_linux_amd64.tar.gz" \
-            | tar -xz -C /tmp actionlint
-          /tmp/actionlint -color
-
-      - name: Actions are pinned by digest
-        run: |
-          set -euo pipefail
-          # A tag can move; a digest cannot. Pinning is only a supply-chain
-          # control if every reference is pinned.
-          if grep -rnE 'uses:\s+[a-z0-9_.-]+/[^@]+@(v[0-9]|main|master)' .github/workflows/; then
-            echo "the references above use a tag; pin them to a commit digest" >&2
-            exit 1
-          fi
-          echo "every action is pinned by digest"
-
-      - name: Every module is tidy and released on its own terms
-        run: |
-          set -euo pipefail
-          # GOWORK=off so each module is built as a consumer receives it. The
-          # workspace is a development convenience and must never be what makes
-          # a module compile.
-          export GOWORK=off
-          status=0
-          while IFS= read -r mod; do
-            dir="$(dirname "$mod")"
-            echo "::group::$dir"
-            ( cd "$dir"
-              cp go.mod /tmp/go.mod.before
-              cp go.sum /tmp/go.sum.before 2>/dev/null || : > /tmp/go.sum.before
-              go mod tidy
-              if ! diff -q /tmp/go.mod.before go.mod >/dev/null; then
-                echo "go.mod is not tidy in $dir" >&2; exit 1
-              fi
-              go build ./...
-            ) || status=1
-            echo "::endgroup::"
-          done < <(find . -name go.mod -not -path './.git/*')
-          exit $status
-
       - name: Release configuration matches the modules on disk
         run: |
           set -euo pipefail

@@ -34,7 +34,10 @@ scaffolded ahead of use.
 
 | Package | Language | Version | Supported toolchains |
 | --- | --- | --- | --- |
-| [`go/store`](go/store) | Go | unreleased | 1.25.x, 1.26.x, 1.27.x |
+| [`go/store`](go/store) | Go | 0.1.0 released; next version requires Go 1.27.1 | 1.27.x, minimum 1.27.1 |
+
+Proposed L0 packages and consumer adoption: [domain package map](docs/l0-domain-packages.md).
+Shared CI ownership and caller contract: [reusable workflows](docs/shared-workflows.md).
 
 ## Versioning
 
@@ -75,7 +78,7 @@ The intended ranges as languages arrive:
 
 | Language | Range | Rationale |
 | --- | --- | --- |
-| Go | 1.25 through 1.27 inclusive | Wider than Go's own two-release window, so a consumer is never forced to upgrade its toolchain to take a fix |
+| Go | 1.27.x, minimum 1.27.1 | Current module and CI baseline; raising the prior 1.25 floor is a breaking change for the next store release |
 | Python | 3.12 through 3.14 inclusive | Covers the versions in use across the fleet |
 | Node | active LTS lines | |
 | Java | current and previous LTS | |

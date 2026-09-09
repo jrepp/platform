@@ -1,41 +1,50 @@
 package store
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
-	"os"
+	"path/filepath"
 )
 
-// rotate moves the file at fullPath aside, keeping at most maxVersions previous
-// copies as name.bak1 through name.bakN, where bak1 is the most recent.
-//
-// Rotation walks from the oldest slot down so that no rename overwrites a copy
-// that has not been moved yet. The oldest is deleted rather than shifted off the
-// end, which is what bounds the store's growth: without it, a name written in a
-// loop would fill the disk with history nobody asked for.
-//
-// Failures are ignored on purpose. Losing a backup must not fail the write that
-// triggered the rotation; the caller's data is the thing that matters.
-func rotate(fullPath string, maxVersions int) {
-	if maxVersions <= 0 {
+// backup takes a best-effort hard-link snapshot without moving the accepted
+// object. Snapshot or rotation failures never make publication fall back to the
+// old move-first behavior.
+func (s *FS) backup(fullPath, cleanName string) {
+	if s.cfg.MaxBackups <= 0 {
 		return
 	}
-	if _, err := os.Stat(fullPath); err != nil {
+	info, err := s.ops.lstat(fullPath)
+	if err != nil || !info.Mode().IsRegular() {
 		return
 	}
-	for idx := maxVersions; idx >= 1; idx-- {
-		candidate := backupName(fullPath, idx)
-		if _, err := os.Stat(candidate); err != nil {
-			continue
-		}
-		if idx == maxVersions {
-			_ = os.Remove(candidate)
-			continue
-		}
-		_ = os.Rename(candidate, backupName(fullPath, idx+1))
+	dir := s.backupDir(cleanName)
+	if err := s.ops.mkdirAll(dir, s.cfg.DirMode); err != nil {
+		return
 	}
-	_ = os.Rename(fullPath, backupName(fullPath, 1))
+	snapshot := filepath.Join(dir, "0")
+	_ = s.ops.remove(snapshot)
+	if err := s.ops.link(fullPath, snapshot); err != nil {
+		return
+	}
+	defer func() { _ = s.ops.remove(snapshot) }()
+
+	for slot := s.cfg.MaxBackups; slot >= 1; slot-- {
+		current := backupSlot(dir, slot)
+		if slot == s.cfg.MaxBackups {
+			_ = s.ops.remove(current)
+			continue
+		}
+		_ = s.ops.rename(current, backupSlot(dir, slot+1))
+	}
+	_ = s.ops.rename(snapshot, backupSlot(dir, 1))
 }
 
-func backupName(fullPath string, idx int) string {
-	return fmt.Sprintf("%s.bak%d", fullPath, idx)
+func (s *FS) backupDir(cleanName string) string {
+	digest := sha256.Sum256([]byte(cleanName))
+	return filepath.Join(s.cfg.BackupRoot, hex.EncodeToString(digest[:]))
+}
+
+func backupSlot(dir string, slot int) string {
+	return filepath.Join(dir, fmt.Sprintf("%d", slot))
 }

@@ -141,7 +141,9 @@ func TestAllowedExtensions(t *testing.T) {
 }
 
 func TestPutKeepsBoundedPreviousVersions(t *testing.T) {
-	s, root := newStore(t, store.FSConfig{MaxBackups: 2})
+	root := t.TempDir()
+	backupRoot := t.TempDir()
+	s, _ := newStore(t, store.FSConfig{Root: root, BackupRoot: backupRoot, MaxBackups: 2})
 
 	for _, body := range []string{"v1", "v2", "v3", "v4"} {
 		put(t, s, "doc.txt", body)
@@ -154,9 +156,11 @@ func TestPutKeepsBoundedPreviousVersions(t *testing.T) {
 	if string(current) != "v4" {
 		t.Errorf("current = %q, want v4", string(current))
 	}
-	// bak1 is the most recent previous version.
-	for name, want := range map[string]string{"doc.txt.bak1": "v3", "doc.txt.bak2": "v2"} {
-		got, err := os.ReadFile(filepath.Join(root, name))
+	key := sha256.Sum256([]byte("doc.txt"))
+	backupDir := filepath.Join(backupRoot, hex.EncodeToString(key[:]))
+	// Slot 1 is the most recent previous version.
+	for name, want := range map[string]string{"1": "v3", "2": "v2"} {
+		got, err := os.ReadFile(filepath.Join(backupDir, name))
 		if err != nil {
 			t.Fatalf("read %s: %v", name, err)
 		}
@@ -166,7 +170,7 @@ func TestPutKeepsBoundedPreviousVersions(t *testing.T) {
 	}
 	// The oldest is dropped rather than shifted off the end, which is what
 	// bounds the store's growth.
-	if _, err := os.Stat(filepath.Join(root, "doc.txt.bak3")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(backupDir, "3")); !os.IsNotExist(err) {
 		t.Error("kept more versions than MaxBackups")
 	}
 }
@@ -261,12 +265,13 @@ func TestMissingObjects(t *testing.T) {
 }
 
 func TestList(t *testing.T) {
-	s, root := newStore(t, store.FSConfig{MaxBackups: 1})
+	s, root := newStore(t, store.FSConfig{})
 	ctx := context.Background()
 
 	put(t, s, "props/crate.fbx", "data")
 	put(t, s, "art/logo.png", "data")
-	put(t, s, "props/crate.fbx", "newer") // produces crate.fbx.bak1
+	put(t, s, "props/crate.fbx.bak1", "legacy backup object")
+	put(t, s, "props/crate.fbx.tmp123", "legacy temp-looking object")
 
 	// A dotfile is not an object.
 	if err := os.WriteFile(filepath.Join(root, ".hidden"), []byte("x"), 0o644); err != nil {
@@ -281,7 +286,7 @@ func TestList(t *testing.T) {
 	for _, obj := range objects {
 		names = append(names, obj.Name)
 	}
-	want := []string{"art/logo.png", "props/crate.fbx", "props/crate.fbx.bak1"}
+	want := []string{"art/logo.png", "props/crate.fbx", "props/crate.fbx.bak1", "props/crate.fbx.tmp123"}
 	if len(names) != len(want) {
 		t.Fatalf("List = %v, want %v", names, want)
 	}

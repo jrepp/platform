@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 )
 
 // FSConfig configures a filesystem-backed store.
@@ -29,9 +30,23 @@ type FSConfig struct {
 	// opinion.
 	AllowedExt []string
 
-	// MaxBackups is how many previous versions of an overwritten object to
-	// keep. Zero keeps none.
+	// MaxBackups is how many previous versions of an overwritten object to keep
+	// in BackupRoot. Zero keeps none.
 	MaxBackups int
+
+	// BackupRoot owns private backup files, outside Root and TempRoot. It is
+	// required when MaxBackups is positive. Legacy name.bakN objects in Root
+	// remain ordinary objects and are never rotated by this version.
+	BackupRoot string
+
+	// TempRoot optionally places staging outside Root, on the same filesystem.
+	// The owner manages crash recovery there. Empty keeps sibling temporaries.
+	TempRoot string
+
+	// ReportCleanupError receives failures removing private staging files. It is
+	// called outside the commit lock and cannot turn a successful Put into an
+	// error. Nil ignores cleanup failures.
+	ReportCleanupError func(error)
 
 	// DirMode and FileMode are the permissions for created directories and
 	// objects. Zero values become 0o755 and 0o644.
@@ -55,7 +70,9 @@ func (c FSConfig) normalize() FSConfig {
 
 // FS is a Store backed by a directory on the local filesystem.
 type FS struct {
-	cfg FSConfig
+	cfg      FSConfig
+	commitMu sync.Mutex
+	ops      fsOperations
 }
 
 var (
@@ -72,7 +89,10 @@ func NewFS(cfg FSConfig) (*FS, error) {
 	if strings.TrimSpace(cfg.Root) == "" {
 		return nil, errors.New("store: root is required")
 	}
-	return &FS{cfg: cfg.normalize()}, nil
+	if err := validateRoots(cfg); err != nil {
+		return nil, err
+	}
+	return &FS{cfg: cfg.normalize(), ops: defaultOperations()}, nil
 }
 
 // Root reports the directory this store owns.
@@ -97,16 +117,10 @@ func (s *FS) LocalPath(name string) (string, error) {
 	return full, nil
 }
 
-// Put writes an object atomically.
-//
-// The bytes land in a temporary file beside the destination, are flushed to
-// disk, and are then renamed into place. A reader of the store therefore sees
-// either the previous object or the complete new one, never a half-written
-// file, which is what a crash mid-upload would otherwise leave behind.
-//
-// The digest is computed from the same stream that is written, so it describes
-// exactly the bytes that landed rather than a subsequent re-read that could
-// disagree.
+// Put publishes complete bytes with one rename. Streaming occurs outside the
+// instance commit lock; backup bookkeeping and publication are serialized.
+// Failures before rename preserve the target. A canceled context racing with
+// publication may still succeed. No directory sync or crash durability is promised.
 func (s *FS) Put(ctx context.Context, name string, r io.Reader) (Object, error) {
 	if err := ctx.Err(); err != nil {
 		return Object{}, err
@@ -124,73 +138,64 @@ func (s *FS) Put(ctx context.Context, name string, r io.Reader) (Object, error) 
 		return Object{}, err
 	}
 	dir := filepath.Dir(full)
-	if err := os.MkdirAll(dir, s.cfg.DirMode); err != nil {
+	if err := s.ops.mkdirAll(dir, s.cfg.DirMode); err != nil {
 		return Object{}, err
 	}
-
-	temp, err := os.CreateTemp(dir, "."+filepath.Base(full)+".tmp*")
+	temp, obj, err := s.stage(ctx, dir, clean, r)
 	if err != nil {
 		return Object{}, err
 	}
-	tempName := temp.Name()
-	// Any failure past this point must not leave the temporary file behind.
-	defer func() { _ = os.Remove(tempName) }()
-
-	hasher := sha256.New()
-	size, err := io.Copy(io.MultiWriter(temp, hasher), r)
-	if err != nil {
-		_ = temp.Close()
+	defer s.cleanupTemp(temp)
+	if err := s.commit(ctx, temp, full, clean); err != nil {
 		return Object{}, err
 	}
-	if err := temp.Sync(); err != nil {
-		_ = temp.Close()
-		return Object{}, err
-	}
-	if err := temp.Close(); err != nil {
-		return Object{}, err
-	}
-	if err := os.Chmod(tempName, s.cfg.FileMode); err != nil {
-		return Object{}, err
-	}
-
-	rotate(full, s.cfg.MaxBackups)
-	if err := os.Rename(tempName, full); err != nil {
-		return Object{}, err
-	}
-
-	stat, err := os.Stat(full)
-	if err != nil {
-		return Object{}, err
-	}
-	return Object{
-		Name:    clean,
-		Ext:     ext,
-		Size:    size,
-		ModTime: stat.ModTime(),
-		Digest:  hex.EncodeToString(hasher.Sum(nil)),
-	}, nil
+	return obj, nil
 }
 
-// Open returns the object's contents and its description.
+func (s *FS) commit(ctx context.Context, temp, full, clean string) error {
+	s.commitMu.Lock()
+	defer s.commitMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.backup(full, clean)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return s.ops.rename(temp, full)
+}
+
+// Open binds metadata to the opened descriptor even if another writer replaces
+// the pathname. Callers close the returned reader.
 func (s *FS) Open(ctx context.Context, name string) (io.ReadCloser, Object, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, Object{}, err
 	}
-	obj, err := s.Stat(ctx, name)
+	clean := cleanName(name)
+	full, err := resolve(s.cfg.Root, clean)
 	if err != nil {
 		return nil, Object{}, err
 	}
-	full, err := s.LocalPath(obj.Name)
+	// #nosec G304 -- resolve bounds the path to the operator-owned store root.
+	file, err := s.ops.open(full)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, Object{}, ErrNotFound
+		}
 		return nil, Object{}, err
 	}
-	// #nosec G304 -- full comes from LocalPath, which resolves the name through
-	// the containment check and returns only paths proven to be under the root.
-	file, err := os.Open(full)
-	if err != nil {
+	info, err := file.Stat()
+	if err != nil || info.IsDir() {
+		_ = file.Close()
+		if err == nil {
+			err = ErrNotFound
+		}
 		return nil, Object{}, err
 	}
-	return file, obj, nil
+	return file, Object{
+		Name: clean, Ext: strings.ToLower(filepath.Ext(clean)),
+		Size: info.Size(), ModTime: info.ModTime(),
+	}, nil
 }
 
 // Stat describes an object without reading it. The returned Digest is empty;
@@ -227,9 +232,9 @@ func (s *FS) Stat(ctx context.Context, name string) (Object, error) {
 
 // List describes every object under the root, ordered by name.
 //
-// Dotfiles are skipped, which is what keeps rotated backups (name.bak1) visible
-// but editor swap files and the store's own temporaries invisible. A missing
-// root lists empty rather than failing.
+// Dotfiles are skipped. Legacy name.bakN and other non-dot temp-looking keys
+// remain ordinary visible objects. New private backups live outside Root. A
+// missing root lists empty rather than failing.
 func (s *FS) List(ctx context.Context) ([]Object, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

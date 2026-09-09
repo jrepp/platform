@@ -53,9 +53,9 @@ type Object struct {
 // backend which is not a local filesystem -- an object store, a remote host --
 // can honour cancellation without the interface changing shape.
 type Store interface {
-	// Put writes an object, replacing any object already stored under the name
-	// and retaining bounded previous versions. The returned Object carries the
-	// digest of what was written.
+	// Put writes an object, replacing any object already stored under the name.
+	// An implementation may retain bounded private previous versions. The
+	// returned Object carries the digest of what was written.
 	Put(ctx context.Context, name string, r io.Reader) (Object, error)
 	// Open returns the object's contents. The caller closes the reader.
 	Open(ctx context.Context, name string) (io.ReadCloser, Object, error)

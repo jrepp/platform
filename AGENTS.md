@@ -47,7 +47,19 @@ either. Before adding one, name both consumers in the pull request.
   close. Nothing starts work as a side effect of another call.
 - **Cancellation on anything that can block or reach a network.**
 
-## Versioning and support
+## Pull requests and merges
+
+- Work on a topic branch and open a PR to `main`; never push directly to `main`.
+- Main requires passing current checks, an up-to-date branch and resolved review
+  threads. No actor has a ruleset bypass. Do not use an admin merge bypass.
+- Use a Conventional Commit PR title, scoped to the affected package when
+  applicable. Squash merge uses that title and the PR body for release history.
+- Squash is the only merge method. Auto-merge and automatic merged-branch
+  deletion are enabled; a maintainer can merge their own PR after the gates pass.
+- Keep shared workflows here and pin external callers to published commit SHAs.
+- See [CONTRIBUTING.md](CONTRIBUTING.md) for the normal merge and release-PR flow.
+
+## Package versioning and support
 
 - Every package is released on its own version line, tagged
   `<package-path>/vX.Y.Z`. A Go module in a subdirectory resolves only by a tag
